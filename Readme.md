@@ -415,6 +415,10 @@ uid=0(root)
 ```
 
 ---
+change the apssword for the root :
+```bash 
+passwd root
+```
 
 # Phase 14 - Capture the Flag
 
